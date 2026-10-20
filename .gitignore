@@ -1,0 +1,39 @@
+## ---------- .NET ----------
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.rsuser
+TestResults/
+*.nupkg
+
+## ---------- Angular / Node ----------
+node_modules/
+dist/
+.angular/
+coverage/
+npm-debug.log*
+
+## ---------- Editors / OS ----------
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+## ---------- AI assistant files ----------
+CLAUDE.md
+.claude/
+AGENTS.md
+
+## ---------- Secrets (never commit these) ----------
+.env
+.env.*
+!.env.example
+appsettings.*.local.json
+appsettings.Production.json
+secrets.json
+*.pfx
+*.key
+*.pem

@@ -1,0 +1,6 @@
+@FinBrief.Api_HostAddress = http://localhost:5132
+
+GET {{FinBrief.Api_HostAddress}}/health
+Accept: application/json
+
+###
