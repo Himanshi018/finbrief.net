@@ -793,3 +793,115 @@ e.g. `Cleanup__KeepArticlesDays=0 dotnet run --project src/FinBrief.Ingest -- cl
 5. **Why is backfill a separate command instead of retrying in ingest?**
    Failures are often temporary (rate limits, timeouts). Saving the article and retrying later keeps ingest
    fast and fail-fast, and a later run finishes the work.
+
+---
+
+## Deployment prep – API on Render, website on Vercel
+
+### What was built and why
+
+Small changes so the same code runs on hosting platforms, configured only through environment variables:
+- **Render** runs the API from our Dockerfile and tells it which port to use through `PORT`.
+- **Vercel** builds the Angular app, serves static files from its CDN and runs server-side rendering in a
+  serverless function.
+- The production API URL and the allowed CORS origin are environment variables, not code, so nothing has to
+  be edited when an address changes.
+
+The step-by-step deployment guide is in the README ("Deploying").
+
+### Files
+
+| File | What it does |
+|---|---|
+| `src/FinBrief.Api/Program.cs` | Listens on `$PORT` when it is set; trims a trailing `/` from CORS origins. |
+| `Dockerfile` | Comments for the `PORT` and CORS variables. |
+| `client/finbrief-web/src/environments/environment.ts` | `apiBaseUrl` comes from the build-time constant `API_BASE_URL`, falling back to `http://localhost:5132`. |
+| `client/finbrief-web/scripts/build.mjs` | `npm run build`: runs `ng build --define API_BASE_URL="..."` when the environment variable is set. |
+| `client/finbrief-web/api/ssr.mjs` | Vercel function: imports `reqHandler` from the built `server.mjs` and lets Angular render the page. |
+| `client/finbrief-web/vercel.json` | Build command, output folder, rewrite of all other URLs to the function, and files the function needs. |
+| `client/finbrief-web/package.json` | `build` script → `scripts/build.mjs`; `engines.node: 24.x` so Vercel uses Node 24. |
+| `README.md` | "Deploying (Render + Vercel)" section and new troubleshooting rows. |
+
+### Concepts
+
+**The `PORT` convention.** Many hosts (Render, Heroku, Cloud Run) start your app and say "listen on this port"
+through `PORT`. `builder.WebHost.UseUrls($"http://0.0.0.0:{port}")` makes ASP.NET Core listen there.
+`0.0.0.0` means "every network interface", which a container needs; `localhost` would only accept connections
+from inside the container.
+
+**Build-time configuration with `--define`.** The browser can't read server environment variables, so the API
+URL is baked into the JavaScript during the build. `ng build --define API_BASE_URL='"https://..."'` replaces
+every `API_BASE_URL` in the code with that string. `declare const API_BASE_URL: string | undefined;` tells
+TypeScript the name exists. The flip side: changing the URL needs a rebuild (a redeploy on Vercel).
+
+**Runtime configuration.** Settings read while the app runs, like `NG_ALLOWED_HOSTS` in the SSR function or
+`ConnectionStrings__Default` in the API. A restart is enough to change them.
+
+**Serverless SSR.** Instead of a server that runs all the time, Vercel starts a function per request.
+`vercel.json` serves real files first (CDN) and rewrites everything else (`"source": "/(.*)"`) to
+`/api/ssr`, which calls Angular's `reqHandler`. `includeFiles` makes sure the built `dist/` folder is
+packaged with the function.
+
+**SSRF protection with allowed hosts.** Angular SSR builds URLs from the request's `Host` header. A fake host
+could make the server call somewhere it shouldn't (Server-Side Request Forgery). So Angular only renders for
+hosts listed in `allowedHosts` / `NG_ALLOWED_HOSTS` and answers others with HTTP 400.
+
+**CORS across two domains.** The website (`https://finbrief.vercel.app`) and the API
+(`https://finbrief-api.onrender.com`) are different origins, so the browser only lets the site read API
+responses if the API sends `Access-Control-Allow-Origin: https://finbrief.vercel.app`.
+`Cors__AllowedOrigins__0` sets that without changing code. Server-side rendering calls the API from Vercel's
+server, where CORS doesn't apply.
+
+### How a request flows in production
+
+Opening `https://finbrief.vercel.app/feed`:
+1. Vercel's CDN has no file called `feed`, so the rewrite sends the request to the `api/ssr` function.
+2. The function loads `server.mjs`; Angular checks the host against `NG_ALLOWED_HOSTS`.
+3. Angular renders `/feed`, calling `https://finbrief-api.onrender.com/api/articles` (the URL baked in at build).
+4. On Render, the container's API (listening on `PORT` 10000) queries Supabase and returns JSON.
+5. Vercel returns the finished HTML. The browser downloads `main-*.js` straight from the CDN and hydrates.
+6. Infinite scroll calls the Render API directly from the browser; the API's CORS header allows the Vercel origin.
+
+### Commands
+
+```powershell
+# Build the website the way Vercel does, with the production API URL baked in (Git Bash syntax):
+API_BASE_URL=https://finbrief-api.onrender.com npm run build
+
+# Run the API the way Render does:
+PORT=10000 ConnectionStrings__Default="Host=..." dotnet FinBrief.Api.dll
+```
+
+### Errors and gotchas
+
+- **Every SSR page returned HTTP 400 "Header host ... is not allowed"** when we tested the Vercel function
+  locally on port 4321. Angular SSR rejects hosts that aren't allowed. Fix: set `NG_ALLOWED_HOSTS`
+  (`localhost` for the local test, your Vercel host name in production).
+- **Vercel's "zero-config Angular" is static only.** Vercel's framework support table doesn't list SSR for
+  Angular, so we added the `api/ssr.mjs` function and `vercel.json` ourselves.
+- **Trailing slashes break CORS.** Browsers send `https://finbrief.vercel.app` without `/`, so an origin entered
+  as `https://finbrief.vercel.app/` would never match. The API now trims it, and `build.mjs` trims it from
+  `API_BASE_URL`.
+- **Two ports, one winner.** With both `ASPNETCORE_HTTP_PORTS=8080` (Dockerfile) and `PORT=10000` (Render), the
+  log says "Overriding HTTP_PORTS '8080'... Binding to http://0.0.0.0:10000". That's expected.
+- **Deploy order matters.** Vercel needs the Render URL, and Render's CORS needs the Vercel URL: Render first,
+  then Vercel, then add CORS on Render.
+- **Render's free plan sleeps.** The first visit after about 15 idle minutes can take up to a minute.
+
+### Interview questions
+
+1. **Why does a containerized app listen on `0.0.0.0` and not `localhost`?**
+   Inside a container, `localhost` only accepts connections from the container itself. `0.0.0.0` accepts
+   connections from outside, which is how the platform's router reaches the app.
+2. **How do you configure a frontend's API URL per environment?**
+   Inject it at build time (environment files, `--define`, or a build script reading an environment variable),
+   or load a config file at runtime. Build-time is simpler; runtime avoids rebuilding.
+3. **What is SSRF and how does Angular SSR protect against it?**
+   Server-Side Request Forgery tricks a server into making requests it shouldn't. Angular SSR only renders for
+   allowed host names, so a forged `Host` header can't point its requests elsewhere.
+4. **Why are static files served from the CDN and pages from a function?**
+   Static files are the same for everyone and can be cached worldwide. Pages need fresh data, so they're
+   rendered per request.
+5. **Why doesn't server-side rendering need CORS?**
+   CORS is enforced by browsers. When Vercel's server calls the API during SSR there is no browser involved;
+   only the browser's own calls (like infinite scroll) need the CORS header.

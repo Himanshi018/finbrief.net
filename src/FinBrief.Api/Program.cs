@@ -6,6 +6,14 @@ using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Hosting platforms such as Render tell the app which port to listen on through the PORT environment variable
+// (Render's default is 10000). Locally PORT isn't set, so launchSettings.json / the Dockerfile decide.
+var port = Environment.GetEnvironmentVariable("PORT");
+if (!string.IsNullOrWhiteSpace(port))
+{
+    builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
+}
+
 // The connection string comes from user-secrets (development) or an environment variable (production).
 // It is never written in appsettings.json.
 var connectionString = builder.Configuration.GetConnectionString("Default")
@@ -19,9 +27,14 @@ builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 
 // CORS lets the Angular app (a different origin, e.g. http://localhost:4200) call this API from the browser.
-// The allowed origins live in appsettings.json under "Cors:AllowedOrigins".
+// The allowed origins live in appsettings.json under "Cors:AllowedOrigins". In production they come from
+// environment variables instead: Cors__AllowedOrigins__0=https://your-app.vercel.app (replaces localhost).
+// A trailing "/" is removed, because browsers send the origin without one.
 const string CorsPolicy = "Frontend";
-var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+var allowedOrigins = (builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [])
+    .Select(origin => origin.Trim().TrimEnd('/'))
+    .Where(origin => origin.Length > 0)
+    .ToArray();
 builder.Services.AddCors(options => options.AddPolicy(CorsPolicy, policy => policy
     .WithOrigins(allowedOrigins)
     .AllowAnyHeader()

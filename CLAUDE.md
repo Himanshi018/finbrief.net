@@ -174,8 +174,18 @@ phase, in simple language for a beginner:
   daily at 00:30 UTC: ingest --max 18, backfill-ai --max 10, cleanup, with
   repository secrets SUPABASE_CONNECTION_STRING and GROQ_API_KEY; Dockerfile
   for the API (port 8080, settings via env vars); README.)
-- Next: deploy the API and set its URL in
-  client/finbrief-web/src/environments/environment.ts; deploy the frontend.
+- Deployment prep: done (code ready; the user still has to create the Render
+  and Vercel projects, steps in README "Deploying").
+  - API on Render (Docker): Program.cs listens on $PORT when set (Render: 10000).
+    Env vars: ConnectionStrings__Default, Cors__AllowedOrigins__0 (Vercel URL;
+    trailing "/" is trimmed in code).
+  - Angular on Vercel with SSR: Root Directory client/finbrief-web;
+    vercel.json (framework null, output dist/finbrief-web/browser, rewrite of
+    everything else to api/ssr.mjs, which calls reqHandler from server.ts).
+    Env vars: API_BASE_URL (baked in at build by scripts/build.mjs via
+    ng build --define) and NG_ALLOWED_HOSTS (Angular SSR rejects other hosts
+    with HTTP 400). Node 24.x via package.json engines.
+- Next: user deploys (Render → Vercel → CORS on Render) and confirms.
 
 ## TODO (later)
 

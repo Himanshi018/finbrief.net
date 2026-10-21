@@ -187,7 +187,85 @@ Then open http://localhost:8080/health.
 
 - Settings are passed as environment variables. A double underscore (`__`) stands for `:` in .NET settings.
 - Scalar (`/scalar`) is only available in Development, not in the container.
-- When the API is deployed, put its URL in `client/finbrief-web/src/environments/environment.ts`.
+- If the `PORT` environment variable is set, the API listens on that port instead of 8080.
+
+---
+
+## Deploying (Render + Vercel)
+
+The API runs on **Render** (from the Dockerfile) and the website on **Vercel** (with server-side rendering).
+Each needs the other's address, so do it in this order: Render, then Vercel, then back to Render for CORS.
+
+Before you start, push the code to GitHub (`git push origin main`).
+
+### Environment variables at a glance
+
+| Where | Name | Value |
+|---|---|---|
+| Render | `ConnectionStrings__Default` | Your Supabase connection string (key=value format, session pooler) |
+| Render | `Cors__AllowedOrigins__0` | Your Vercel address, e.g. `https://finbrief.vercel.app` |
+| Render | `PORT` | Don't add it: Render sets it automatically (10000) and the API uses it |
+| Vercel | `API_BASE_URL` | Your Render address, e.g. `https://finbrief-api.onrender.com` |
+| Vercel | `NG_ALLOWED_HOSTS` | Your Vercel host name **without** `https://`, e.g. `finbrief.vercel.app` |
+
+### Step 1: the API on Render
+
+1. Go to [render.com](https://render.com) and sign in with GitHub.
+2. Click **New** → **Web Service** and choose your `finbrief.net` repository.
+3. Fill in:
+   - **Name**: `finbrief-api` (this becomes `https://finbrief-api.onrender.com`; Render adds letters if the name is taken)
+   - **Language**: `Docker`
+   - **Branch**: `main`
+   - **Root Directory**: leave empty
+   - **Region**: `Singapore` (closest to India)
+   - **Instance Type**: `Free`
+4. Under **Environment Variables**, add `ConnectionStrings__Default` with your connection string.
+   Leave CORS for later; you don't know the Vercel address yet.
+5. Under **Advanced**, set **Health Check Path** to `/health`.
+6. Click **Deploy Web Service** and wait until the log says the service is live (the first Docker build takes a few minutes).
+7. Copy the address at the top of the page and open `https://<your-api>.onrender.com/health`.
+   You should see `{"status":"ok"}`. Also try `/api/categories`.
+
+> The free plan goes to sleep after about 15 minutes without visits; the next visit wakes it up, which
+> can take up to a minute.
+
+### Step 2: the website on Vercel
+
+1. Go to [vercel.com](https://vercel.com) and sign in with GitHub.
+2. Click **Add New…** → **Project** and import your `finbrief.net` repository.
+3. **Root Directory**: click **Edit** and choose `client/finbrief-web`. (Important: the Angular app is in that folder.)
+4. **Framework Preset**: `Other`. Leave the build and output settings alone: `vercel.json` sets them.
+5. Open **Environment Variables** and add:
+   - `API_BASE_URL` = your Render address from step 1, e.g. `https://finbrief-api.onrender.com` (no `/` at the end)
+   - `NG_ALLOWED_HOSTS` = the address Vercel will give the project, without `https://`. It is usually
+     `<project-name>.vercel.app`, e.g. `finbrief.vercel.app`.
+6. Click **Deploy** and wait for "Congratulations".
+7. Look at the **Domains** shown for the project. If the domain is different from what you put in
+   `NG_ALLOWED_HOSTS`, go to **Settings** → **Environment Variables**, fix it, then **Deployments** → ⋯ →
+   **Redeploy**. (Without the right value every page shows "Bad Request".)
+
+### Step 3: allow the website in the API's CORS
+
+1. Back on Render, open your service → **Environment** → **Add Environment Variable**:
+   - `Cors__AllowedOrigins__0` = your Vercel address **with** `https://`, e.g. `https://finbrief.vercel.app`
+2. Click **Save, rebuild, and deploy**.
+
+### Step 4: check it
+
+Open your Vercel address:
+- the landing page loads, and **Start reading** shows the feed with articles
+- tapping a key-term chip, Save, and the category tabs work
+- in the browser's developer tools (F12) → **Console**, there are no red "CORS" errors
+
+### How it works on Vercel
+
+- `scripts/build.mjs` (run by `npm run build`) reads `API_BASE_URL` and builds it into the app.
+  Changing it on Vercel requires a redeploy.
+- Files that exist in `dist/finbrief-web/browser` (JavaScript, CSS and the prerendered landing page) are served
+  straight from Vercel's CDN. Every other page goes through the `api/ssr.mjs` function, which runs Angular's
+  server-side rendering. `vercel.json` sets this up.
+- Angular only renders for host names listed in `NG_ALLOWED_HOSTS` (protection against SSRF attacks).
+  To also use Vercel's preview deployments, add their host names separated by commas.
 
 ---
 
@@ -211,6 +289,9 @@ npx ng test --watch=false
 | `Groq kept rate-limiting us` | Use a smaller `--max` or a larger `Groq:MinSecondsBetweenCalls`. |
 | The feed is empty | Run `ingest`. Only articles with all AI fields filled are shown. |
 | The website can't reach the API | Is the API running on port 5132? Is `http://localhost:4200` in `Cors:AllowedOrigins`? |
+| Vercel shows "Bad Request" on every page | `NG_ALLOWED_HOSTS` doesn't match the Vercel host name. Fix it and redeploy. |
+| "CORS" errors in the browser console on Vercel | Set `Cors__AllowedOrigins__0` on Render to the exact Vercel address with `https://`. |
+| Vercel site loads but the feed is empty or errors | Check `API_BASE_URL` on Vercel, redeploy, and open `<API>/health` to wake Render up. |
 | `dotnet: command not found` in Git Bash | Add `export PATH="$PATH:/c/Program Files/dotnet:$HOME/.dotnet/tools"` to `~/.bashrc`. |
 
 More background on every part is in [docs/LEARNING.md](docs/LEARNING.md).

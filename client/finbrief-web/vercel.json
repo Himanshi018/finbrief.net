@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npm ci",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist/finbrief-web/browser",
+  "rewrites": [{ "source": "/(.*)", "destination": "/api/ssr" }],
+  "functions": {
+    "api/ssr.mjs": {
+      "includeFiles": "dist/finbrief-web/**"
+    }
+  }
+}

@@ -25,7 +25,8 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
 COPY --from=build /app/publish .
 
-# The API listens on port 8080 inside the container.
+# The API listens on port 8080 inside the container, unless the host sets PORT
+# (Render does: default 10000). Program.cs then uses PORT instead.
 ENV ASPNETCORE_HTTP_PORTS=8080
 EXPOSE 8080
 
@@ -34,5 +35,6 @@ USER app
 
 # Settings come from environment variables at runtime (never baked into the image):
 #   ConnectionStrings__Default   - required
-#   Cors__AllowedOrigins__0      - your frontend's URL, e.g. https://finbrief.example.com
+#   Cors__AllowedOrigins__0      - your frontend's URL, e.g. https://finbrief.vercel.app
+#   PORT                         - optional; set automatically by Render
 ENTRYPOINT ["dotnet", "FinBrief.Api.dll"]
