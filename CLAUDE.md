@@ -174,8 +174,12 @@ phase, in simple language for a beginner:
   daily at 00:30 UTC: ingest --max 18, backfill-ai --max 10, cleanup, with
   repository secrets SUPABASE_CONNECTION_STRING and GROQ_API_KEY; Dockerfile
   for the API (port 8080, settings via env vars); README.)
-- Deployment prep: done (code ready; the user still has to create the Render
-  and Vercel projects, steps in README "Deploying").
+  GitHub Actions daily ingest WORKS: repository secrets SUPABASE_CONNECTION_STRING
+  and GROQ_API_KEY are set. The Supabase pooler host must be
+  aws-0-ap-south-1.pooler.supabase.com (NOT aws-1).
+- Phases 1–6: done and committed.
+- Deployment prep: done (code ready; Render + Vercel instructions written in
+  README "Deploying").
   - API on Render (Docker): Program.cs listens on $PORT when set (Render: 10000).
     Env vars: ConnectionStrings__Default, Cors__AllowedOrigins__0 (Vercel URL;
     trailing "/" is trimmed in code).
@@ -185,7 +189,15 @@ phase, in simple language for a beginner:
     Env vars: API_BASE_URL (baked in at build by scripts/build.mjs via
     ng build --define) and NG_ALLOWED_HOSTS (Angular SSR rejects other hosts
     with HTTP 400). Node 24.x via package.json engines.
-- Next: user deploys (Render → Vercel → CORS on Render) and confirms.
+- Deployment: NOT started.
+  - Render: user has only signed in. No web service has been created yet.
+  - Vercel: account exists, but the project has not been imported yet.
+- Next:
+  1. Create the Render web service (Docker, Singapore, Free) with
+     ConnectionStrings__Default and health check path /health.
+  2. Create the Vercel project (Root Directory client/finbrief-web) with
+     API_BASE_URL (the Render URL) and NG_ALLOWED_HOSTS (the Vercel host name).
+  3. Add the Vercel URL to CORS on Render (Cors__AllowedOrigins__0) and redeploy.
 
 ## TODO (later)
 
