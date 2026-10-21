@@ -43,7 +43,7 @@ public enum IngestOutcome
 public record ProcessedItem(
     FeedItem Item,
     string? ImageUrl,
-    string ImageFrom,       // "rss", "og:image" or "none"
+    string ImageFrom,       // "rss", "og:image", "none" or "off for this source"
     AiBrief? Brief,
     string? AiError,
     IngestOutcome Outcome);

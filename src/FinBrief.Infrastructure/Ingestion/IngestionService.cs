@@ -153,9 +153,19 @@ public class IngestionService(
     private async Task<ProcessedItem> ProcessAsync(FeedItem item, IngestReport report, bool dryRun, CancellationToken ct)
     {
         // Step 9: image from RSS, else from the page's og:image, else none.
-        var imageUrl = item.ImageUrl;
-        var imageFrom = "rss";
-        if (imageUrl is null)
+        // Publishers with "UseImages": false in appsettings.json never get an image.
+        string? imageUrl = null;
+        string imageFrom;
+        if (!settings.ForSource(item.SourceName).UseImages)
+        {
+            imageFrom = "off for this source";
+        }
+        else if (item.ImageUrl is not null)
+        {
+            imageUrl = item.ImageUrl;
+            imageFrom = "rss";
+        }
+        else
         {
             imageUrl = await images.FindOgImageAsync(item.Url, ct);
             imageFrom = imageUrl is null ? "none" : "og:image";

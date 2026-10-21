@@ -154,4 +154,22 @@ phase, in simple language for a beginner:
   --dry-run). Ingest shares the API's UserSecretsId; secrets are
   ConnectionStrings:Default and Groq:ApiKey (env vars ConnectionStrings__Default,
   Groq__ApiKey). POST /api/ingest was removed: GitHub Actions runs the console app.
-- Next: Phase 5 (Angular app). Upgrade Node first (22.22+ or 24.15+).
+- Phase 5: done (Angular 22 app in client/finbrief-web: standalone components,
+  signals, zoneless, SSR with render modes (landing prerendered, saved
+  client-only, rest server-rendered), Tailwind v4. Pages: landing, feed
+  (category tabs, search, infinite scroll), article detail, saved
+  (localStorage), 404. API URL in src/environments. Brand colour teal; "Why it
+  matters" is a teal block; corners rounded-md.)
+  Ingestion tweaks made during phase 5:
+  - Per-source "UseImages" in Ingestion:Sources (Livemint = false: its
+    thumbnails are mostly AI graphics; existing Livemint image_url cleared).
+    og:image fallback is skipped for ET /videoshow/ pages (text title cards).
+  - Groq free tier = 8,000 tokens/min and 1,000 requests/day; one article ≈ 830
+    tokens. Calls are spaced by Groq:MinSecondsBetweenCalls (8 s). To fill
+    every category with ≥5 articles use --max 42; daily runs --max 18.
+- Next: Phase 6 (backfill-ai, cleanup, GitHub Actions workflow, Dockerfile,
+  README, production API URL in environment.ts).
+
+## TODO (later)
+
+- Improve the text-only card design (cards without an image).

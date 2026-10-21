@@ -1,0 +1,8 @@
+/* Global styles. Tailwind v4 is configured here in CSS (no tailwind.config.js needed). */
+
+@import 'tailwindcss';
+
+@theme {
+  /* Inter is loaded in index.html; the rest is a fallback while it downloads. */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+}

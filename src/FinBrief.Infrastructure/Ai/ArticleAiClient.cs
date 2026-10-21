@@ -29,11 +29,12 @@ public class ArticleAiClient
     // Groq tells us how long to wait when we send requests too fast (per-minute limits).
     // Short waits are fine; a long wait means the daily quota is used up.
     private static readonly TimeSpan MaxRateLimitWait = TimeSpan.FromSeconds(60);
-    private const int MaxAttempts = 3;
+    private const int MaxAttempts = 5;
 
     private readonly ChatClient? _chat;
     private readonly GroqSettings _settings;
     private readonly ILogger<ArticleAiClient> _logger;
+    private DateTime _lastCallUtc = DateTime.MinValue;
 
     public ArticleAiClient(GroqSettings settings, ILogger<ArticleAiClient> logger)
     {
@@ -78,6 +79,8 @@ public class ArticleAiClient
 
         for (var attempt = 1; ; attempt++)
         {
+            await WaitForNextCallSlotAsync(ct);
+
             try
             {
                 ChatCompletion completion = await _chat.CompleteChatAsync(messages, options, ct);
@@ -111,6 +114,10 @@ public class ArticleAiClient
                         await Task.Delay(wait.Value, ct);
                         continue;
 
+                    case 429 when wait is not null && wait <= MaxRateLimitWait:
+                        throw new AiStopException(
+                            "Groq kept rate-limiting us (HTTP 429). Increase Groq:MinSecondsBetweenCalls or use a smaller --max.");
+
                     case 429:
                         throw new AiStopException("Groq quota used up (HTTP 429). Try again later or tomorrow.");
 
@@ -128,6 +135,18 @@ public class ArticleAiClient
                 throw new AiArticleException("Groq did not answer within 60 seconds.");
             }
         }
+    }
+
+    // Spaces calls at least MinSecondsBetweenCalls apart, so a big --max doesn't hit the per-minute limit.
+    private async Task WaitForNextCallSlotAsync(CancellationToken ct)
+    {
+        var wait = _lastCallUtc.AddSeconds(_settings.MinSecondsBetweenCalls) - DateTime.UtcNow;
+        if (wait > TimeSpan.Zero)
+        {
+            await Task.Delay(wait, ct);
+        }
+
+        _lastCallUtc = DateTime.UtcNow;
     }
 
     private static TimeSpan? GetRetryAfter(ClientResultException ex)

@@ -10,6 +10,12 @@ public class ImageFetcher(HttpClient http, ILogger<ImageFetcher> logger)
 {
     public async Task<string?> FindOgImageAsync(string articleUrl, CancellationToken ct)
     {
+        // Video pages (ET uses /videoshow/) have title-card thumbnails full of text, not news photos.
+        if (articleUrl.Contains("/videoshow/", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
         try
         {
             var html = await http.GetStringAsync(articleUrl, ct);

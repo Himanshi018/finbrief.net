@@ -502,3 +502,171 @@ The `--` separates `dotnet run`'s own options from the arguments passed to our p
 5. **What is a dry run and why build one?**
    A mode that executes the real logic but skips writes. It lets you test against live feeds and the real
    AI safely, and see exactly what would be saved before it is.
+
+---
+
+## Phase 5 – Angular app (landing, feed, card, detail, saved)
+
+### What was built and why
+
+The website readers use, in `client/finbrief-web`. It is mobile-first and Inshorts-style: one column of
+cards, each with a simple headline, a short summary, a highlighted teal "Why it matters" block and tappable
+key terms. Pages are rendered on the server (SSR) so search engines and link previews see real content, then
+the browser takes over ("hydration").
+
+While testing we also changed ingestion: Livemint images are switched off (they were mostly AI-generated
+graphics), and Groq calls are spaced out to respect the free tier's per-minute limit.
+
+### Files
+
+| File | What it does |
+|---|---|
+| `src/app/app.ts` | App shell: sticky header (logo, Feed, Saved with count) and `<router-outlet>`. |
+| `src/app/app.routes.ts` | URL → page: `/`, `/feed`, `/articles/:id`, `/saved`, and `**` (404). |
+| `src/app/app.routes.server.ts` | How each URL is rendered: landing prerendered, saved client-only, the rest server-rendered. |
+| `src/app/app.config.ts` | Router (input binding, scroll restoration), `HttpClient` with fetch, hydration with event replay. |
+| `src/app/core/models.ts` | TypeScript interfaces that mirror the API's DTOs. |
+| `src/app/core/articles-api.ts` | The only place that knows the API URL; `getArticles()` plus URLs for `httpResource`. |
+| `src/app/core/feed-store.ts` | Root service holding the feed (items, cursor, status) so Back from an article keeps your place. |
+| `src/app/core/saved-articles.ts` | Saved articles in `localStorage`, exposed as signals; safe during SSR. |
+| `src/app/core/category-names.ts` | Slug → display name for cards ("ai-business" → "AI Business"). |
+| `src/app/core/time-ago.ts` (+ `.spec.ts`) | `timeAgo` pipe: "5m ago", "3h ago", "2d ago". |
+| `src/app/pages/landing-page.ts` | Promise, four feature tiles and an example card. |
+| `src/app/pages/feed-page.ts` | Search, category tabs, cards, infinite scroll, loading/empty/error states. |
+| `src/app/pages/article-page.ts` | Full brief, Terms explained, original headline + "Read full article on {source}", related stories, SEO title/description, 404 status. |
+| `src/app/pages/saved-page.ts` | Saved cards or an empty state. |
+| `src/app/pages/not-found-page.ts` | 404 page (real HTTP 404 during SSR). |
+| `src/app/shared/article-card.ts` | The card. With a photo: 2:1 image on top. Without: a thin teal accent bar and a bigger headline. |
+| `src/app/shared/why-it-matters.ts` | The teal "Why it matters" block. |
+| `src/app/shared/key-term-chips.ts` | Chips; tap one to show its meaning. |
+| `src/app/shared/save-button.ts` | Bookmark toggle. |
+| `src/app/shared/infinite-scroll.ts` | Directive that fires when the end of the list comes near the screen. |
+| `src/app/shared/page-states.ts` | Loading skeleton, empty state and error state (with "Try again"). |
+| `src/environments/environment*.ts` | `apiBaseUrl` for development and production builds. |
+| `src/index.html`, `src/styles.css` | Page title/description, Inter font, Tailwind import and theme. |
+| `src/FinBrief.Ingest/appsettings.json` | New `Ingestion:Sources` (`"Livemint": { "UseImages": false }`) and `Groq:MinSecondsBetweenCalls: 8`. |
+| `src/FinBrief.Infrastructure/Ingestion/*`, `Ai/ArticleAiClient.cs` | Per-source image switch, no og:image for video pages, spacing between AI calls, clearer 429 messages. |
+
+### Concepts
+
+**Standalone components.** A component lists what it uses in `imports`, with no NgModules:
+`imports: [RouterLink, TimeAgoPipe, KeyTermChips, SaveButton, WhyItMatters]` in `article-card.ts`.
+
+**Signals.** A signal is a value Angular watches; when it changes, only the parts of the page that read it
+update. `readonly items = signal<ArticleCard[]>([])` in `FeedStore`; `items.set(...)` changes it and
+`items()` reads it. `computed(() => ...)` derives a value, e.g.
+`count = computed(() => this.saved().length)`.
+
+**Zoneless change detection.** The app was created with `--zoneless`, so Angular updates the page when
+signals change instead of after every browser event. That's why state is kept in signals.
+
+**Inputs and outputs as functions.** `article = input.required<ArticleCard>()` receives data from the parent
+(`<app-article-card [article]="a" />`); `retry = output<void>()` sends events up (`(retry)="store.retry()"`).
+
+**Built-in control flow.** `@if`, `@for (... ; track article.id)`, `@switch` and `@let` replace `*ngIf`/`*ngFor`.
+`@for ... @empty { }` shows the empty state when the list has no items.
+
+**httpResource.** Loads data reactively from a signal:
+`article = httpResource<ArticleDetail>(() => this.api.articleUrl(this.id()))`. When `id()` changes (clicking a
+related story), it reloads by itself, and gives you `hasValue()`, `value()`, `error()` and `reload()`.
+
+**Route params as inputs.** With `withComponentInputBinding()`, the `:id` in `/articles/:id` arrives as
+`id = input.required<string>()`. No `ActivatedRoute` code needed.
+
+**SSR, hydration and render modes.** The server runs the same Angular code and sends finished HTML. In the
+browser, `provideClientHydration()` reuses that HTML instead of redrawing it. `app.routes.server.ts` picks per
+URL: `RenderMode.Prerender` (built once), `Server` (every request) or `Client` (browser only, for `/saved`,
+because the server has no `localStorage`).
+
+**Browser-only code.** `localStorage`, `IntersectionObserver` and `window` don't exist on the server. We
+guard with `isPlatformBrowser(inject(PLATFORM_ID))` in `SavedArticles`, and put browser setup inside
+`afterNextRender(() => ...)` in `InfiniteScroll`, which only runs in the browser.
+
+**HTTP status during SSR.** `inject(RESPONSE_INIT, { optional: true })` exists only on the server. Setting
+`status = 404` makes unknown articles and pages return a real 404, so search engines don't index them.
+
+**Infinite scroll.** An empty `<div appInfiniteScroll>` sits after the last card. When it gets within 600px of
+the screen, the directive emits `reached` and the store loads the next page with the API's `nextCursor`. A
+"Load more" button is the fallback.
+
+**Debounced search with RxJS.** Every keystroke goes into a `Subject`; `debounceTime(400)` waits until typing
+stops before updating `?q=` in the URL. The feed reacts to the URL, so searches can be shared and are SSR'd.
+
+**Tailwind CSS v4.** Utility classes in the template (`rounded-md bg-teal-50 px-4 py-3`) instead of separate
+CSS files. Configuration lives in `styles.css` (`@import 'tailwindcss'; @theme { ... }`), not a JS config file.
+
+**Environments.** `environment.development.ts` is swapped in for `ng serve` (see `fileReplacements` in
+`angular.json`), so the API URL can differ between development and production without code changes.
+
+**Rate limiting by spacing calls.** Groq's free tier allows 8,000 tokens per minute and an article uses about
+830, so `ArticleAiClient` waits `MinSecondsBetweenCalls` (8 s) between calls instead of hitting the limit and
+retrying.
+
+### How a request flows
+
+Opening `http://localhost:4200/feed?category=markets` in a browser:
+1. The Angular dev server (or `server.ts` in production) receives the request; `app.routes.server.ts` says
+   `/feed` is server-rendered.
+2. On the server, the router shows `FeedPage`. Its constructor subscribes to the query params and calls
+   `FeedStore.load('markets', null)`.
+3. `ArticlesApi.getArticles` calls `GET http://localhost:5132/api/articles?category=markets&limit=10`.
+   SSR waits for the response, renders the cards to HTML, and stores the JSON in the page ("transfer state").
+4. The browser shows that HTML immediately, then downloads the JavaScript.
+5. Hydration attaches Angular to the existing HTML. The HTTP call is not repeated: the stored JSON is reused.
+6. Scrolling near the end makes `InfiniteScroll` emit, `FeedStore.loadMore()` requests the next page with the
+   cursor, and the new cards are appended to the `items` signal.
+7. Tapping "Read full brief" navigates to `/articles/5` in the browser (no full reload); `ArticlePage`'s
+   `httpResource` loads the brief. Back returns to the feed at the same scroll position, because the
+   `FeedStore` still holds the items.
+
+### Commands
+
+```powershell
+node -v                                    # needs 22.22+ or 24.15+ for Angular CLI 22
+npx @angular/cli@22 new finbrief-web --directory client/finbrief-web --style tailwind --ssr --routing --zoneless --commit=false
+npx ng g environments                      # creates src/environments and fileReplacements
+cd client/finbrief-web
+npm start                                  # dev server with SSR at http://localhost:4200
+npx ng build                               # production build (+ prerenders the landing page)
+npx ng test --watch=false                  # unit tests with Vitest, run once
+npm run serve:ssr:finbrief-web             # run the production SSR server from dist/
+```
+
+### Errors and gotchas
+
+- **`[class.text-[15px]]` doesn't work.** A class binding name can't contain `[` `]`, which Tailwind uses for
+  custom values. Use `[class]="large() ? 'text-base' : 'text-[15px]'"` instead.
+- **Port 4200 already in use** when starting a second `ng serve`. Only one dev server can use a port; use the
+  one already running (it reloads changes automatically) or `npm start -- --port 4300`.
+- **Screenshots looked cut off at 412px.** Headless Edge has a minimum window width of about 500px, so the
+  page was laid out at 500px and cropped. Not a layout bug; at 500px everything fit.
+- **ET images wouldn't open in Windows image tools.** ET serves WebP even when asked for JPEG; browsers
+  handle it fine.
+- **Livemint thumbnails were AI-generated graphics.** Both the RSS image and the page's og:image were the
+  same graphic, so there was no real photo to fall back to. Fix: `"UseImages": false` for Livemint and
+  `UPDATE articles SET image_url = NULL WHERE source_name = 'Livemint'` for the stored ones.
+- **A text-heavy video title card came from og:image.** ET video pages (`/videoshow/`) use title cards as
+  their preview image, so the og:image fallback now skips them.
+- **Big ingest runs would stop with "quota used up".** Calls were sent back to back; after about 8 articles
+  Groq's 8,000 tokens/minute limit returned 429, and three in a row stopped the run with a misleading
+  message. Fix: 8 seconds between calls, more retries for short waits, and a message that says "slow down".
+- **Old images in Saved.** Saved articles are copies in `localStorage`, so they keep the image they had
+  when saved.
+
+### Interview questions
+
+1. **What are signals and why use them instead of plain properties?**
+   Signals are values Angular tracks. When one changes, Angular knows exactly which parts of the page read
+   it and updates only those, which also makes zoneless change detection possible.
+2. **What is SSR and what is hydration?**
+   SSR renders the page to HTML on the server, so it shows instantly and search engines can read it.
+   Hydration lets Angular in the browser take over that HTML instead of rebuilding it.
+3. **Why does `/saved` use `RenderMode.Client`?**
+   The saved list lives in `localStorage`, which only exists in the browser. Server-rendering it would always
+   show an empty list first.
+4. **How do you avoid calling the API twice with SSR?**
+   Angular's HTTP transfer cache stores the server's responses in the HTML; during hydration, `HttpClient`
+   reuses them instead of sending the same request again.
+5. **Why keep the feed in a root service instead of the page component?**
+   The component is destroyed when you open an article. A root service survives navigation, so Back shows
+   the same items and the router can restore the scroll position.

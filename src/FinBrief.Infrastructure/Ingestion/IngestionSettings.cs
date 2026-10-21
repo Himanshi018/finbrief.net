@@ -9,6 +9,19 @@ public class IngestionSettings
     public int MaxAgeHours { get; set; } = 72;
 
     public List<FeedSettings> Feeds { get; set; } = [];
+
+    // Per-publisher options, keyed by source name, e.g. "Livemint": { "UseImages": false }.
+    // A source that isn't listed uses the defaults.
+    public Dictionary<string, SourceSettings> Sources { get; set; } = [];
+
+    public SourceSettings ForSource(string sourceName) =>
+        Sources.GetValueOrDefault(sourceName) ?? new SourceSettings();
+}
+
+public class SourceSettings
+{
+    // false = never store an image for this publisher (e.g. when its thumbnails are mostly AI graphics).
+    public bool UseImages { get; set; } = true;
 }
 
 // One RSS feed, e.g. Economic Times "markets" → our "markets" category.
@@ -28,6 +41,10 @@ public class GroqSettings
     // gpt-oss "thinks" before answering, and those reasoning tokens count toward this limit,
     // so it must leave room for both the reasoning and the JSON answer.
     public int MaxOutputTokens { get; set; } = 2048;
+
+    // Pause between AI calls so we stay under Groq's free-tier limit of 8,000 tokens per minute.
+    // One article uses about 830 tokens, so 8 seconds apart is about 7 calls (≈6,000 tokens) a minute.
+    public double MinSecondsBetweenCalls { get; set; } = 8;
 
     // Secret: comes from user-secrets ("Groq:ApiKey") or the environment variable Groq__ApiKey.
     public string? ApiKey { get; set; }
