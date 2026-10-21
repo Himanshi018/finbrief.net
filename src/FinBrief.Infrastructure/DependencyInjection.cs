@@ -1,4 +1,6 @@
+using FinBrief.Infrastructure.Ai;
 using FinBrief.Infrastructure.Data;
+using FinBrief.Infrastructure.Ingestion;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -16,5 +18,29 @@ public static class DependencyInjection
             .UseSnakeCaseNamingConvention());
 
         return services;
+    }
+
+    // Everything the ingestion pipeline needs: RSS reader, image fetcher, AI client and the pipeline itself.
+    public static IServiceCollection AddIngestion(
+        this IServiceCollection services, IngestionSettings ingestionSettings, GroqSettings groqSettings)
+    {
+        services.AddSingleton(ingestionSettings);
+        services.AddSingleton(groqSettings);
+
+        // AddHttpClient<T> gives each class a ready HttpClient and manages the underlying connections for us.
+        services.AddHttpClient<RssReader>(ConfigureWebClient);
+        services.AddHttpClient<ImageFetcher>(ConfigureWebClient);
+
+        services.AddSingleton<ArticleAiClient>();
+        services.AddScoped<IngestionService>();
+
+        return services;
+    }
+
+    private static void ConfigureWebClient(HttpClient client)
+    {
+        // Identify ourselves honestly to the publishers.
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("FinBriefBot/1.0 (finance news summaries; links back to the source)");
+        client.Timeout = TimeSpan.FromSeconds(20);
     }
 }

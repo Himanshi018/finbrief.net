@@ -148,4 +148,10 @@ phase, in simple language for a beginner:
 - Phase 3: done (articles/categories endpoints, cursor pagination, search, CORS
   for localhost:4200, Scalar at /scalar, EnableRowLevelSecurity migration applied
   to all tables incl. __EFMigrationsHistory)
-- Next: Phase 4.
+- Phase 4: done (Ingest console app: 12 verified ET/Livemint feeds in
+  src/FinBrief.Ingest/appsettings.json, keyword filters, round-robin selection,
+  one Groq call per article, tolerant JSON parsing, fail-fast, og:image fallback,
+  --dry-run). Ingest shares the API's UserSecretsId; secrets are
+  ConnectionStrings:Default and Groq:ApiKey (env vars ConnectionStrings__Default,
+  Groq__ApiKey). POST /api/ingest was removed: GitHub Actions runs the console app.
+- Next: Phase 5 (Angular app). Upgrade Node first (22.22+ or 24.15+).

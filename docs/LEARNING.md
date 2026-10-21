@@ -349,3 +349,156 @@ dotnet run --project src/FinBrief.Api --launch-profile http   # then open http:/
 5. **Why return DTOs instead of entities?**
    They control exactly what is exposed, avoid leaking internal fields, avoid serialization loops from
    navigation properties, and let the database change without breaking clients.
+
+---
+
+## Phase 4 – RSS + AI ingestion console app
+
+### What was built and why
+
+The part that fills the database. `FinBrief.Ingest ingest` reads 12 Economic Times and Livemint RSS feeds,
+throws away old, duplicate and stock-tip items, picks a fair mix across categories, asks the AI (Groq,
+model `openai/gpt-oss-120b`) to explain each one simply, and saves the result.
+`--dry-run` runs every step except saving, so you can check the output first.
+
+We also removed the planned `POST /api/ingest` endpoint: GitHub Actions will run this console app
+directly, so the API stays read-only and needs no secret.
+
+### Files
+
+| File | What it does |
+|---|---|
+| `src/FinBrief.Ingest/Program.cs` | Reads the command (`ingest`, flags `--dry-run`, `--max N`), loads configuration, registers services, runs the pipeline, prints the report, and returns exit code 1 on problems. |
+| `src/FinBrief.Ingest/ReportPrinter.cs` | Prints every selected article (original title, simple title, summary, why it matters, key terms, image) and a summary of the counts. |
+| `src/FinBrief.Ingest/appsettings.json` | The 12 feed URLs with their category, the 72-hour limit, Groq model settings, and log levels. No secrets. |
+| `src/FinBrief.Ingest/Properties/launchSettings.json` | Sets `DOTNET_ENVIRONMENT=Development` for `dotnet run`, so user-secrets are loaded. |
+| `src/FinBrief.Ingest/FinBrief.Ingest.csproj` | Same `UserSecretsId` as the API; copies `appsettings.json` to the output folder; adds `Microsoft.Extensions.Hosting`. |
+| `src/FinBrief.Infrastructure/Ingestion/IngestionService.cs` | The pipeline: read feeds → filter → skip known URLs → round-robin pick → image → AI → save. |
+| `src/FinBrief.Infrastructure/Ingestion/RssReader.cs` | Downloads a feed and turns each `<item>` into a clean `FeedItem` (HTML removed, description ≤ 280 chars, UTC date, image from `<enclosure>` or `<media:content>`). |
+| `src/FinBrief.Infrastructure/Ingestion/NewsFilter.cs` | Keyword rules: finance signals, stock-tip clickbait patterns, excluded domains, and the "geopolitics → global-finance" rule. |
+| `src/FinBrief.Infrastructure/Ingestion/ImageFetcher.cs` | If the RSS item has no image, reads the article page's `og:image` with AngleSharp. |
+| `src/FinBrief.Infrastructure/Ingestion/FeedItem.cs` | One cleaned-up RSS story (only the fields we may legally store). |
+| `src/FinBrief.Infrastructure/Ingestion/IngestReport.cs` | Counters and per-article outcomes of a run. |
+| `src/FinBrief.Infrastructure/Ingestion/IngestionSettings.cs` | Classes that `appsettings.json` sections are loaded into (`IngestionSettings`, `FeedSettings`, `GroqSettings`). |
+| `src/FinBrief.Infrastructure/Ai/ArticleAiClient.cs` | One Groq call per article through the OpenAI SDK; decides which errors stop the run and which only skip one article. |
+| `src/FinBrief.Infrastructure/Ai/AiPrompt.cs` | The instructions sent to the AI. |
+| `src/FinBrief.Infrastructure/Ai/AiResponseParser.cs` | Tolerant JSON parsing of the AI's reply. |
+| `src/FinBrief.Infrastructure/DependencyInjection.cs` | New `AddIngestion(...)` that registers all of the above. |
+| `src/FinBrief.Infrastructure/FinBrief.Infrastructure.csproj` | Adds `System.ServiceModel.Syndication`, `OpenAI`, `AngleSharp`, `Microsoft.Extensions.Http`. |
+
+### Concepts
+
+**Generic Host in a console app.** `Host.CreateApplicationBuilder(...)` gives a console app the same
+configuration, logging and DI that ASP.NET Core has. We then ask DI for the pipeline:
+`scope.ServiceProvider.GetRequiredService<IngestionService>()`.
+
+**Configuration layers.** Later sources override earlier ones: `appsettings.json` → user-secrets
+(Development only) → environment variables. The key `Groq:ApiKey` in user-secrets is the environment
+variable `Groq__ApiKey` (double underscore = colon), which is how GitHub Actions will supply it.
+
+**Shared user-secrets.** User-secrets are stored per `UserSecretsId`, not per project. Giving the Ingest
+project the API's id (`0799f371-...`) means one `dotnet user-secrets set` works for both apps.
+
+**Binding settings to classes.** `builder.Configuration.GetSection("Ingestion").Get<IngestionSettings>()`
+turns the JSON section into a C# object, so the code uses `settings.MaxAgeHours` instead of strings.
+
+**IHttpClientFactory (typed clients).** `services.AddHttpClient<RssReader>(...)` hands `RssReader` a ready
+`HttpClient` with our User-Agent and a 20 s timeout, and reuses connections correctly. Creating
+`new HttpClient()` everywhere can exhaust sockets.
+
+**RSS with SyndicationFeed.** `SyndicationFeed.Load(reader)` parses RSS/Atom into objects, so we read
+`item.Title.Text`, `item.PublishDate` and `item.Links` instead of raw XML. Livemint's image is a Media RSS
+extension, read through `item.ElementExtensions`.
+
+**Regular expressions with `[GeneratedRegex]`.** Patterns such as `could soar|multibagger|stocks? to (buy|watch|sell)`
+are compiled at build time. `\b(invest)\w*` means "a word starting with invest", so it matches investors too.
+
+**Round-robin selection.** Each category gets a queue of its newest candidates, and we take one from each
+in turn until `--max` is reached. Categories with the fewest stored articles go first, so with `--max 3`
+the small categories still get filled over several runs.
+
+**Calling an OpenAI-compatible API.** Groq speaks the same protocol as OpenAI, so the official SDK works by
+changing the address: `new OpenAIClientOptions { Endpoint = new Uri("https://api.groq.com/openai/v1") }`.
+gpt-oss is a reasoning model: `ReasoningEffortLevel = Low` keeps its thinking short, and
+`MaxOutputTokenCount = 2048` leaves room for thinking + answer.
+
+**Fail fast vs. retry.** A bad key (401), unknown model (404) or used-up quota (429 with a long wait) throws
+`AiStopException`: one message, no more AI calls this run. A short 429 wait or a 5xx error is retried.
+Anything else throws `AiArticleException`: that article is saved without AI text and `backfill-ai` retries it later.
+
+**Tolerant parsing.** Models sometimes wrap JSON in code fences or add "Here is the JSON:".
+`AiResponseParser` keeps only the part between the first `{` and the last `}`, accepts `simple_title` or
+`simpleTitle`, and strips labels like `**Why It Matters:**`.
+
+**Dry run.** A flag that runs the real code path but skips the writes:
+`if (!dryRun && !await SaveAsync(...))`. It is the safe way to test against live data.
+
+**Exit codes.** `return 1;` from `Program.cs` tells the caller something went wrong. GitHub Actions marks
+the run as failed, so you notice.
+
+### How an ingest run flows
+
+`dotnet run --project src/FinBrief.Ingest -- ingest --dry-run`
+1. `Program.cs` reads the command and flags, builds the host, and loads `appsettings.json` + user-secrets.
+2. It checks the connection string (and, for real runs, the Groq key), then registers services with DI.
+3. `IngestionService.RunAsync` loads the category slugs from the database.
+4. **Read:** `RssReader` downloads each of the 12 feeds; a failing feed is logged and skipped.
+5. **Filter:** drop duplicates, items older than 72 h, excluded domains, stock-tip titles, and items with no
+   finance words. Titles about oil/sanctions/tariffs/shipping are moved to `global-finance`.
+6. **Skip known URLs:** one query each against `articles` and `article_rejections`.
+7. **Select:** round-robin across categories, up to `--max` (default 6).
+8. For each selected item: find an image (RSS → og:image → none), call the AI once, then decide:
+   relevant → article, not relevant → rejection, AI failed → article without AI text.
+9. In a real run each result is saved immediately with `SaveChangesAsync`; in a dry run nothing is saved.
+10. `ReportPrinter` prints the articles and the summary, and the program returns 0 or 1.
+
+### Commands
+
+```powershell
+dotnet add src/FinBrief.Infrastructure package System.ServiceModel.Syndication   # RSS parsing
+dotnet add src/FinBrief.Infrastructure package OpenAI                            # official OpenAI SDK (used with Groq)
+dotnet add src/FinBrief.Infrastructure package AngleSharp                        # HTML parsing for og:image
+dotnet add src/FinBrief.Infrastructure package Microsoft.Extensions.Http         # AddHttpClient
+dotnet add src/FinBrief.Ingest package Microsoft.Extensions.Hosting              # host, config, DI, logging for the console app
+dotnet user-secrets set "Groq:ApiKey" "<your key>" --project src/FinBrief.Api    # shared with Ingest (same UserSecretsId)
+dotnet run --project src/FinBrief.Ingest -- ingest --dry-run                     # everything except saving
+dotnet run --project src/FinBrief.Ingest -- ingest --max 3                       # real run, 3 articles
+```
+
+The `--` separates `dotnet run`'s own options from the arguments passed to our program.
+
+### Errors and gotchas
+
+- **Build failed with "file is locked by FinBrief.Api" (MSB3021).** The API was still running, and Windows
+  doesn't let you overwrite a DLL that a running program uses. Stop the API (Ctrl+C) before building the
+  whole solution, or build just one project: `dotnet build src/FinBrief.Ingest`.
+- **Livemint has no startups feed.** `https://www.livemint.com/rss/startups` returns 404. Startups come from
+  ET's startups and funding feeds instead. Always check a feed returns 200 with recent items before adding it.
+- **Some feeds were mostly off-topic.** Livemint `technology` is mainly gadget deals and ET `news/international`
+  is general world news, so we left them out and used ET `world/business` for global finance.
+- **The keyword filter dropped real finance stories** (farmers' income, utility bills). We printed every
+  blocked headline, found these, and added `money`, `income`, `saving`, `spend`, `subsid` and `energy` to
+  the finance words. Check what a filter removes, not just what it keeps.
+- **`appsettings.json` not found when running from the repo root.** A console app looks in the current folder by
+  default. Prevented with `ContentRootPath = AppContext.BaseDirectory` and copying the file to the output
+  folder (`CopyToOutputDirectory` in the csproj).
+- **An API key was pasted into a chat.** Anything pasted into a chat, issue or commit should be treated as
+  leaked: create a new key in the Groq console and set it again with `dotnet user-secrets set`.
+
+### Interview questions
+
+1. **Why use IHttpClientFactory instead of `new HttpClient()`?**
+   It reuses and recycles connections, so you avoid socket exhaustion and stale DNS, and it keeps
+   configuration (headers, timeouts) in one place.
+2. **How does the app read secrets locally and in CI without code changes?**
+   Configuration is layered. Locally, user-secrets supply `Groq:ApiKey`; in CI, the environment variable
+   `Groq__ApiKey` supplies the same key, and environment variables override earlier sources.
+3. **Why one AI call per article, and why stop on some errors?**
+   One call returns the relevance decision and all text fields together, which keeps cost and rate limits
+   low. Errors like a bad key or used-up quota would fail for every article, so continuing only wastes time.
+4. **Why does the AI reply need tolerant parsing?**
+   LLMs don't always follow the format exactly (code fences, extra text, different key names). Parsing
+   tolerantly turns small format slips into usable data instead of failed articles.
+5. **What is a dry run and why build one?**
+   A mode that executes the real logic but skips writes. It lets you test against live feeds and the real
+   AI safely, and see exactly what would be saved before it is.
