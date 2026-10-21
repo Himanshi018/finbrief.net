@@ -14,6 +14,14 @@ public static class ArticleQueries
             a.WhyItMatters != null && a.WhyItMatters != "" &&
             a.KeyTerms.Count > 0);
 
+    // The opposite: articles saved while the AI step failed. backfill-ai fills them; cleanup removes old ones.
+    public static IQueryable<Article> WhereBriefIsMissing(this IQueryable<Article> articles) =>
+        articles.Where(a =>
+            a.SimpleTitle == null || a.SimpleTitle == "" ||
+            a.Summary == null || a.Summary == "" ||
+            a.WhyItMatters == null || a.WhyItMatters == "" ||
+            a.KeyTerms.Count == 0);
+
     // Newest first. Id breaks ties when two articles have the same publish time.
     public static IOrderedQueryable<Article> NewestFirst(this IQueryable<Article> articles) =>
         articles.OrderByDescending(a => a.PublishedAt).ThenByDescending(a => a.Id);

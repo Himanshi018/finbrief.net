@@ -1,0 +1,66 @@
+# Runs the FinBrief.Ingest console app once a day: ingest new stories, retry failed AI steps, clean up.
+# Needs two repository secrets (Settings → Secrets and variables → Actions):
+#   SUPABASE_CONNECTION_STRING  - Npgsql format: Host=...;Port=5432;Database=postgres;Username=...;Password=...;SSL Mode=Require
+#   GROQ_API_KEY                - your Groq API key (gsk_...)
+name: Daily ingest
+
+on:
+  schedule:
+    - cron: "30 0 * * *"   # every day at 00:30 UTC = 06:00 in India
+  workflow_dispatch:       # adds a "Run workflow" button on the Actions tab
+    inputs:
+      max:
+        description: "Max new articles (18 = 3 per category)"
+        required: false
+        default: "18"
+
+permissions:
+  contents: read           # the job only needs to read the code
+
+concurrency:
+  group: ingest            # never run two ingests at the same time
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      DOTNET_NOLOGO: "true"
+      DOTNET_ENVIRONMENT: Production
+      # Double underscore = ":" in .NET configuration, so these become ConnectionStrings:Default and Groq:ApiKey.
+      ConnectionStrings__Default: ${{ secrets.SUPABASE_CONNECTION_STRING }}
+      Groq__ApiKey: ${{ secrets.GROQ_API_KEY }}
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v5
+
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Build
+        id: build
+        run: dotnet build src/FinBrief.Ingest --configuration Release
+
+      # --no-launch-profile: ignore launchSettings.json (which would switch to Development).
+      - name: Ingest new articles
+        run: >
+          dotnet run --project src/FinBrief.Ingest --configuration Release --no-build --no-launch-profile
+          -- ingest --max ${{ github.event.inputs.max || '18' }}
+
+      # The next steps also run if ingest failed (e.g. one bad feed), but not if the build failed.
+      - name: Retry articles whose AI step failed
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: >
+          dotnet run --project src/FinBrief.Ingest --configuration Release --no-build --no-launch-profile
+          -- backfill-ai --max 10
+
+      - name: Clean up old data
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: >
+          dotnet run --project src/FinBrief.Ingest --configuration Release --no-build --no-launch-profile
+          -- cleanup

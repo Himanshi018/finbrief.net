@@ -1,0 +1,16 @@
+# Files Docker should not send to the build (smaller, faster, and no secrets).
+**/bin/
+**/obj/
+.git/
+.github/
+.vs/
+.vscode/
+.claude/
+client/
+docs/
+**/*.user
+**/.env
+**/.env.*
+**/secrets.json
+Dockerfile
+.dockerignore

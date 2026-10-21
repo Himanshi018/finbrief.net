@@ -670,3 +670,126 @@ npm run serve:ssr:finbrief-web             # run the production SSR server from 
 5. **Why keep the feed in a root service instead of the page component?**
    The component is destroyed when you open an article. A root service survives navigation, so Back shows
    the same items and the router can restore the scroll position.
+
+---
+
+## Phase 6 – Backfill, cleanup, GitHub Actions, Docker, README
+
+### What was built and why
+
+The pieces that keep FinBrief running without you:
+- **`backfill-ai`** finishes articles whose AI step failed (they are hidden until then), and with `--images`
+  finds missing images.
+- **`cleanup`** deletes old data so the free Supabase database stays small.
+- **A GitHub Actions workflow** runs ingest, backfill and cleanup every morning on GitHub's computers.
+- **A Dockerfile** packages the API so it can run on any hosting service.
+- **A README** explains how to set everything up from scratch.
+
+### Files
+
+| File | What it does |
+|---|---|
+| `src/FinBrief.Infrastructure/Ingestion/BackfillService.cs` | Retries the AI for unfinished articles (fill, or reject and remember the URL); optionally finds og:images. |
+| `src/FinBrief.Infrastructure/Ingestion/CleanupService.cs` | Counts (dry run) or deletes old articles, unfinished articles and old rejections. |
+| `src/FinBrief.Infrastructure/Ingestion/IngestionSettings.cs` | New `CleanupSettings` (days to keep each kind of data). |
+| `src/FinBrief.Infrastructure/Data/ArticleQueries.cs` | New `WhereBriefIsMissing()`, the opposite of `WhereBriefIsReady()`. |
+| `src/FinBrief.Infrastructure/DependencyInjection.cs` | Registers the backfill and cleanup services and their settings. |
+| `src/FinBrief.Ingest/Program.cs` | Handles all three commands, `--images`, and exit codes. |
+| `src/FinBrief.Ingest/ReportPrinter.cs` | Summaries for backfill and cleanup. |
+| `src/FinBrief.Ingest/appsettings.json` | New `Cleanup` section (30 / 7 / 7 days). |
+| `.github/workflows/ingest.yml` | The daily job. |
+| `Dockerfile`, `.dockerignore` | How to build the API container, and what to leave out of it. |
+| `README.md` | Setup, running, commands, GitHub secrets, Docker, troubleshooting. |
+
+### Concepts
+
+**Backfill.** Instead of retrying a failed AI call immediately, the article is saved without AI text and a
+later run fills it in. `db.Articles.WhereBriefIsMissing().NewestFirst().Take(max)` finds them.
+
+**Data retention.** Decide how long each kind of data is useful. Rejections only matter while their RSS item
+is younger than 72 hours (older items are skipped anyway), so keeping them 7 days is plenty.
+
+**Bulk delete with `ExecuteDeleteAsync`.** `oldRejections.ExecuteDeleteAsync()` becomes one SQL
+`DELETE ... WHERE rejected_at < @cutoff` without loading the rows into memory first.
+`!db.SavedArticles.Any(s => s.ArticleId == a.Id)` becomes a `NOT EXISTS` subquery, so saved articles survive.
+
+**GitHub Actions.** A YAML file in `.github/workflows` describes a job: when to run (`on: schedule` with a cron
+expression, or `workflow_dispatch` for a manual button), which machine (`runs-on: ubuntu-latest`) and which
+steps. Example: `cron: "30 0 * * *"` means 00:30 UTC every day, which is 06:00 in India.
+
+**Repository secrets.** Values you store in GitHub settings, used as `${{ secrets.GROQ_API_KEY }}`. They are
+hidden in logs and never in the code. We pass them as environment variables
+(`Groq__ApiKey: ${{ secrets.GROQ_API_KEY }}`), which .NET reads as `Groq:ApiKey`.
+
+**Step conditions.** `if: ${{ !cancelled() && steps.build.outcome == 'success' }}` lets cleanup run even if
+ingest failed, but not if the build failed.
+
+**Exit codes in CI.** `return 1;` from `Program.cs` makes the step red in GitHub Actions, so a bad key or
+quota problem is visible instead of silently ignored.
+
+**Multi-stage Docker build.** Stage 1 uses the big SDK image to compile; stage 2 copies only the published
+output into the small `aspnet` runtime image. Copying the `.csproj` files and running `dotnet restore` before
+copying the code lets Docker cache the package download.
+
+**Configuration by environment variables.** Containers and CI get settings from environment variables:
+`ConnectionStrings__Default`, `Cors__AllowedOrigins__0` (the first item of the `AllowedOrigins` list). The
+same code reads them as it reads appsettings.json, with no code changes between environments.
+
+**Environments.** Scalar and the OpenAPI JSON are mapped only in Development
+(`if (app.Environment.IsDevelopment())`), so in Production (the container) they return 404.
+
+### How the daily job flows
+
+1. At 00:30 UTC, GitHub starts an Ubuntu machine and checks out the repository.
+2. `actions/setup-dotnet` installs .NET 10; `dotnet build src/FinBrief.Ingest --configuration Release`.
+3. The repository secrets become the environment variables `ConnectionStrings__Default` and `Groq__ApiKey`.
+4. `ingest --max 18` reads the feeds, picks about 3 stories per category, calls Groq 8 seconds apart, and
+   saves them to Supabase.
+5. `backfill-ai --max 10` retries any article whose AI step failed.
+6. `cleanup` deletes data past its retention time.
+7. The next time someone opens the website, the API returns the new articles.
+
+### Commands
+
+```powershell
+dotnet run --project src/FinBrief.Ingest -- backfill-ai --dry-run --images   # what backfill would do
+dotnet run --project src/FinBrief.Ingest -- cleanup --dry-run                 # what cleanup would delete
+dotnet publish src/FinBrief.Api/FinBrief.Api.csproj --configuration Release --output ./publish   # what the Dockerfile runs
+docker build -t finbrief-api .                                                # build the container image
+docker run -p 8080:8080 -e ConnectionStrings__Default="Host=..." finbrief-api  # run it
+```
+
+Testing settings without editing files: environment variables override appsettings.json for one run,
+e.g. `Cleanup__KeepArticlesDays=0 dotnet run --project src/FinBrief.Ingest -- cleanup --dry-run` (Git Bash).
+
+### Errors and gotchas
+
+- **Nothing to test against.** Your data was too new for cleanup to match anything, and every article
+  already had AI text. We tested cleanup's queries with a dry run and retention set to 0 days through
+  environment variables (52 articles and 7 rejections counted), then ran the real cleanup with normal
+  settings (0 deleted).
+- **Docker wasn't installed locally**, so the image itself wasn't built. We ran the same `dotnet publish` step
+  and started the result in Production mode with settings only from environment variables.
+- **`dotnet run` in CI uses launchSettings.json** and would switch to Development. The workflow passes
+  `--no-launch-profile` and sets `DOTNET_ENVIRONMENT: Production`.
+- **Supabase's direct connection doesn't work from GitHub Actions.** Use the pooler host (as in setup step 2
+  of the README).
+- **An environment variable list item replaces, not adds.** `Cors__AllowedOrigins__0` replaced
+  `http://localhost:4200` (item 0 in appsettings.json). Use `__1` to add a second origin.
+
+### Interview questions
+
+1. **How do you run a scheduled job without a server?**
+   With a scheduled CI workflow (GitHub Actions `on: schedule` with cron). GitHub starts a machine, runs the
+   steps and shuts it down, so there's nothing to host.
+2. **How do you give a CI job secrets safely?**
+   Store them as repository secrets and pass them in as environment variables. They are hidden in logs and
+   never written to the code or the image.
+3. **Why a multi-stage Dockerfile?**
+   The SDK is only needed to build. The final image contains just the runtime and the app, so it is smaller,
+   starts faster and has less to attack.
+4. **Why delete with `ExecuteDeleteAsync` instead of loading and removing entities?**
+   It runs one SQL DELETE in the database, without loading thousands of rows into memory and tracking them.
+5. **Why is backfill a separate command instead of retrying in ingest?**
+   Failures are often temporary (rate limits, timeouts). Saving the article and retrying later keeps ingest
+   fast and fail-fast, and a later run finishes the work.

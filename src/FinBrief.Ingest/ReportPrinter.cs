@@ -50,6 +50,42 @@ public static class ReportPrinter
         }
     }
 
+    public static void Print(BackfillReport report)
+    {
+        Console.WriteLine();
+        Console.WriteLine(report.DryRun
+            ? "==================== BACKFILL DRY RUN: nothing was saved ===================="
+            : "==================== BACKFILL RESULT ====================");
+        Console.WriteLine($"Articles without AI text: {report.MissingAi}");
+        Console.WriteLine($"  AI text {(report.DryRun ? "would be " : "")}added:  {report.Filled}");
+        Console.WriteLine($"  {(report.DryRun ? "would be " : "")}rejected:       {report.Rejected}  (not finance → article_rejections)");
+        Console.WriteLine($"  AI failed again:    {report.Failed}  (tried again next run)");
+
+        if (report.MissingImages > 0 || report.ImagesFound > 0)
+        {
+            Console.WriteLine($"Articles without image:   {report.MissingImages}");
+            Console.WriteLine($"  images {(report.DryRun ? "would be " : "")}added:   {report.ImagesFound}");
+        }
+
+        if (report.AiStopReason is not null)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"AI: {report.AiStopReason}");
+        }
+    }
+
+    public static void Print(CleanupReport report, CleanupSettings settings)
+    {
+        var verb = report.DryRun ? "Would delete" : "Deleted";
+        Console.WriteLine();
+        Console.WriteLine(report.DryRun
+            ? "==================== CLEANUP DRY RUN: nothing was deleted ===================="
+            : "==================== CLEANUP RESULT ====================");
+        Console.WriteLine($"{verb} {report.OldArticles} articles older than {settings.KeepArticlesDays} days (saved ones are kept)");
+        Console.WriteLine($"{verb} {report.UnfinishedArticles} articles still without AI text after {settings.KeepUnfinishedDays} days");
+        Console.WriteLine($"{verb} {report.OldRejections} rejected URLs older than {settings.KeepRejectionsDays} days");
+    }
+
     private static void PrintItem(int number, ProcessedItem p, bool dryRun)
     {
         var item = p.Item;

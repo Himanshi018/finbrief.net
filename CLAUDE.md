@@ -167,8 +167,15 @@ phase, in simple language for a beginner:
   - Groq free tier = 8,000 tokens/min and 1,000 requests/day; one article ≈ 830
     tokens. Calls are spaced by Groq:MinSecondsBetweenCalls (8 s). To fill
     every category with ≥5 articles use --max 42; daily runs --max 18.
-- Next: Phase 6 (backfill-ai, cleanup, GitHub Actions workflow, Dockerfile,
-  README, production API URL in environment.ts).
+- Phase 6: done (backfill-ai [--dry-run] [--max 30] [--images] retries articles
+  without AI text and fills missing images; cleanup [--dry-run] deletes
+  articles > 30 days unless saved, unfinished > 7 days, rejections > 7 days
+  (Cleanup section in appsettings.json); .github/workflows/ingest.yml runs
+  daily at 00:30 UTC: ingest --max 18, backfill-ai --max 10, cleanup, with
+  repository secrets SUPABASE_CONNECTION_STRING and GROQ_API_KEY; Dockerfile
+  for the API (port 8080, settings via env vars); README.)
+- Next: deploy the API and set its URL in
+  client/finbrief-web/src/environments/environment.ts; deploy the frontend.
 
 ## TODO (later)
 

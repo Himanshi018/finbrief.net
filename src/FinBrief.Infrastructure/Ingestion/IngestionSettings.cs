@@ -18,6 +18,20 @@ public class IngestionSettings
         Sources.GetValueOrDefault(sourceName) ?? new SourceSettings();
 }
 
+// How long the cleanup command keeps things (the "Cleanup" section of appsettings.json).
+public class CleanupSettings
+{
+    // Articles older than this are deleted, unless a user saved them.
+    public int KeepArticlesDays { get; set; } = 30;
+
+    // Articles whose AI step never succeeded (hidden from the feed) are deleted after this.
+    public int KeepUnfinishedDays { get; set; } = 7;
+
+    // Rejected URLs only matter while their RSS item is younger than MaxAgeHours (72 h);
+    // after that, ingest skips them for being too old anyway. Keep this longer than 3 days.
+    public int KeepRejectionsDays { get; set; } = 7;
+}
+
 public class SourceSettings
 {
     // false = never store an image for this publisher (e.g. when its thumbnails are mostly AI graphics).

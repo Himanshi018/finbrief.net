@@ -20,12 +20,17 @@ public static class DependencyInjection
         return services;
     }
 
-    // Everything the ingestion pipeline needs: RSS reader, image fetcher, AI client and the pipeline itself.
+    // Everything the console commands need: RSS reader, image fetcher, AI client, and the
+    // ingest, backfill and cleanup services.
     public static IServiceCollection AddIngestion(
-        this IServiceCollection services, IngestionSettings ingestionSettings, GroqSettings groqSettings)
+        this IServiceCollection services,
+        IngestionSettings ingestionSettings,
+        GroqSettings groqSettings,
+        CleanupSettings cleanupSettings)
     {
         services.AddSingleton(ingestionSettings);
         services.AddSingleton(groqSettings);
+        services.AddSingleton(cleanupSettings);
 
         // AddHttpClient<T> gives each class a ready HttpClient and manages the underlying connections for us.
         services.AddHttpClient<RssReader>(ConfigureWebClient);
@@ -33,6 +38,8 @@ public static class DependencyInjection
 
         services.AddSingleton<ArticleAiClient>();
         services.AddScoped<IngestionService>();
+        services.AddScoped<BackfillService>();
+        services.AddScoped<CleanupService>();
 
         return services;
     }
