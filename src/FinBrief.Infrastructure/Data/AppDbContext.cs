@@ -77,7 +77,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         modelBuilder.Entity<ArticleRejection>(b =>
         {
             b.Property(r => r.Url).HasMaxLength(1000);
-            b.Property(r => r.Reason).HasMaxLength(500);
+            b.Property(r => r.Reason).HasMaxLength(ArticleRejection.ReasonMaxLength);
             b.Property(r => r.RejectedAt).HasDefaultValueSql("now()");
             b.HasIndex(r => r.Url).IsUnique();
         });

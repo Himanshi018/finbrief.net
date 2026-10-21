@@ -23,7 +23,6 @@ npm-debug.log*
 Thumbs.db
 
 ## ---------- AI assistant files ----------
-CLAUDE.md
 .claude/
 AGENTS.md
 

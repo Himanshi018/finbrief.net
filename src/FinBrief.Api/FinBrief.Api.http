@@ -4,3 +4,23 @@ GET {{FinBrief.Api_HostAddress}}/health
 Accept: application/json
 
 ###
+
+GET {{FinBrief.Api_HostAddress}}/api/categories
+Accept: application/json
+
+###
+
+GET {{FinBrief.Api_HostAddress}}/api/articles?limit=10
+Accept: application/json
+
+###
+
+GET {{FinBrief.Api_HostAddress}}/api/articles?category=markets&search=rbi
+Accept: application/json
+
+###
+
+GET {{FinBrief.Api_HostAddress}}/api/articles/1
+Accept: application/json
+
+###
